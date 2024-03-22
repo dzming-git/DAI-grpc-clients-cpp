@@ -15,11 +15,7 @@
 
 #include <string>
 #include <vector>
-#include <grpc++/grpc++.h>
-#include <mutex>
-#include <opencv2/opencv.hpp>
-#include "protos/behavior_recognition/behavior_recognition.grpc.pb.h"
-#include "protos/behavior_recognition/behavior_recognition.pb.h"
+#include <memory>
 
 class BehaviorRecognitionClient {
 public:
@@ -40,13 +36,8 @@ public:
     bool getResultByImageId(int64_t imageId, std::vector<BehaviorRecognitionClient::Result>& results);
     bool getLatestResult(std::vector<BehaviorRecognitionClient::Result>& results);
 private:
-    std::mutex stubMutex;
-    behaviorRecognition::Communicate::Stub* stub;
-    int64_t taskId;
-    std::vector<std::string> labels;
-    std::atomic<bool> shouldStop;
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
 };
-
-
 
 #endif /* _BEHAVIOR_RECOGNITION_CLIENT_H_ */

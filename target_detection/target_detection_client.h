@@ -14,11 +14,8 @@
 #define _TARGET_DETECTION_CLIENT_H_
 
 #include <string>
-#include <grpc++/grpc++.h>
-#include <mutex>
-#include <opencv2/opencv.hpp>
-#include "protos/target_detection/target_detection.grpc.pb.h"
-#include "protos/target_detection/target_detection.pb.h"
+#include <memory>
+#include <vector>
 
 class TargetDetectionClient {
 public:
@@ -38,14 +35,9 @@ public:
     bool getMappingTable();
     bool getResultByImageId(int64_t imageId, std::vector<TargetDetectionClient::Result>& results);
     bool loadModel(int64_t taskId);
-    bool checkModelState(int64_t taskId, targetDetection::ModelState& modelState);
 private:
-    std::mutex stubMutex;
-    targetDetection::Communicate::Stub* stub;
-    int64_t taskId;
-    std::mutex labelsMutex;
-    std::vector<std::string> labels;
-    std::atomic<bool> shouldStop;
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
 };
 
 

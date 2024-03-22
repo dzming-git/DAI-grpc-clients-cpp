@@ -14,11 +14,8 @@
 #define _IMAGE_HARMONY_CLIENT_H_
 
 #include <string>
-#include <grpc++/grpc++.h>
-#include <mutex>
+#include <memory>
 #include <opencv2/opencv.hpp>
-#include "protos/image_harmony/image_harmony.grpc.pb.h"
-#include "protos/image_harmony/image_harmony.pb.h"
 
 class ImageHarmonyClient {
 public:
@@ -38,10 +35,8 @@ public:
     bool getImageByImageId(ImageHarmonyClient::ImageInfo imageInfo, int64_t& imageIdOutput, cv::Mat& imageOutput);
     bool getImageSize(ImageHarmonyClient::ImageInfo imageInfo, int64_t &imageIdOutput, int& width, int& height);
 private:
-    std::mutex stubMutex;
-    imageHarmony::Communicate::Stub* stub;
-    int64_t connectionId;
-    std::atomic<bool> shouldStop;
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
 };
 
 #endif /* _IMAGE_HARMONY_CLIENT_H_ */

@@ -1,53 +1,67 @@
-#include "grpc/clients/target_detection/target_detection_client.h"
+#include "target_detection_client.h"
+#include <grpc++/grpc++.h>
+#include <mutex>
+#include <opencv2/opencv.hpp>
+#include "target_detection.grpc.pb.h"
+#include "target_detection.pb.h"
 
-TargetDetectionClient::TargetDetectionClient(): stub(nullptr), taskId(0) {
-    shouldStop.store(false);
+struct TargetDetectionClient::Impl {
+    std::mutex stubMutex;
+    std::mutex labelsMutex;
+    targetDetection::Communicate::Stub* stub = nullptr;
+    int64_t taskId = 0;
+    std::vector<std::string> labels;
+    std::atomic<bool> shouldStop{false};
+};
+
+TargetDetectionClient::TargetDetectionClient(): pImpl(new Impl()) {
+
 }
 
 TargetDetectionClient::~TargetDetectionClient() {
-    shouldStop.store(true);
-    std::lock(stubMutex, labelsMutex); // 同时锁定两个互斥锁
-    std::lock_guard<std::mutex> lk1(stubMutex, std::adopt_lock);
-    std::lock_guard<std::mutex> lk2(labelsMutex, std::adopt_lock);
-    if (stub) {
-        delete stub;
-        stub = nullptr;
+    pImpl->shouldStop.store(true);
+    std::lock(pImpl->stubMutex, pImpl->labelsMutex); // 同时锁定两个互斥锁
+    std::lock_guard<std::mutex> lk1(pImpl->stubMutex, std::adopt_lock);
+    std::lock_guard<std::mutex> lk2(pImpl->labelsMutex, std::adopt_lock);
+    if (pImpl->stub) {
+        delete pImpl->stub;
+        pImpl->stub = nullptr;
     }
 }
 
 bool TargetDetectionClient::setAddress(std::string ip, int port) {
-    if (shouldStop.load()) return false;
+    if (pImpl->shouldStop.load()) return false;
     // TODO 重置时未考虑线程安全
     std::shared_ptr<grpc::ChannelInterface> channel = grpc::CreateChannel(ip + ":" + std::to_string(port), grpc::InsecureChannelCredentials());
     std::unique_ptr<targetDetection::Communicate::Stub> stubTmp = targetDetection::Communicate::NewStub(channel);
     // 重置
-    if (stub) {
-        delete stub;
-        stub = nullptr;
+    if (pImpl->stub) {
+        delete pImpl->stub;
+        pImpl->stub = nullptr;
     }
     // unique_ptr 转为 普通指针
-    stub = stubTmp.get();
+    pImpl->stub = stubTmp.get();
     stubTmp.release();
     return true;
 }
 
 bool TargetDetectionClient::setTaskId(int64_t taskId) {
-    if (shouldStop.load()) return false;
-    this->taskId = taskId;
+    if (pImpl->shouldStop.load()) return false;
+    pImpl->taskId = taskId;
     return true;
 }
 
 bool TargetDetectionClient::getMappingTable() {
-    if (shouldStop.load()) return false;
-    if (nullptr == stub) {
+    if (pImpl->shouldStop.load()) return false;
+    if (nullptr == pImpl->stub) {
         return false;
     }
     targetDetection::GetResultMappingTableRequest getResultMappingTableRequest;
     targetDetection::GetResultMappingTableResponse getResultMappingTableResponse;
     grpc::ClientContext context;
 
-    getResultMappingTableRequest.set_taskid(taskId);
-    grpc::Status status = stub->getResultMappingTable(&context, getResultMappingTableRequest, &getResultMappingTableResponse);
+    getResultMappingTableRequest.set_taskid(pImpl->taskId);
+    grpc::Status status = pImpl->stub->getResultMappingTable(&context, getResultMappingTableRequest, &getResultMappingTableResponse);
     targetDetection::CustomResponse response = getResultMappingTableResponse.response();
     int32_t code = response.code();
     if (200 != code) {
@@ -57,20 +71,20 @@ bool TargetDetectionClient::getMappingTable() {
         return false;
     }
     int labelsCnt = getResultMappingTableResponse.labels_size();
-    labels.resize(labelsCnt);
+    pImpl->labels.resize(labelsCnt);
     for (int i = 0; i < labelsCnt; ++i) {
-        labels[i] = getResultMappingTableResponse.labels(i);
+        pImpl->labels[i] = getResultMappingTableResponse.labels(i);
     }
     return true;
 }
 
 bool TargetDetectionClient::getResultByImageId(int64_t imageId, std::vector<TargetDetectionClient::Result>& results) {
-    if (shouldStop.load()) return false;
-    std::lock_guard<std::mutex> lock(labelsMutex);
-    if (nullptr == stub) {
+    if (pImpl->shouldStop.load()) return false;
+    std::lock_guard<std::mutex> lock(pImpl->labelsMutex);
+    if (nullptr == pImpl->stub) {
         return false;
     }
-    if (labels.empty()) {
+    if (pImpl->labels.empty()) {
         std::cout << "labels is empty" << std::endl;
         return false;
     }
@@ -78,10 +92,10 @@ bool TargetDetectionClient::getResultByImageId(int64_t imageId, std::vector<Targ
     targetDetection::GetResultIndexByImageIdResponse getResultIndexByImageIdResponse;
     grpc::ClientContext context;
 
-    getResultIndexByImageIdRequest.set_taskid(taskId);
+    getResultIndexByImageIdRequest.set_taskid(pImpl->taskId);
     getResultIndexByImageIdRequest.set_imageid(imageId);
     getResultIndexByImageIdRequest.set_wait(true);
-    grpc::Status status = stub->getResultIndexByImageId(&context, getResultIndexByImageIdRequest, &getResultIndexByImageIdResponse);
+    grpc::Status status = pImpl->stub->getResultIndexByImageId(&context, getResultIndexByImageIdRequest, &getResultIndexByImageIdResponse);
     targetDetection::CustomResponse response = getResultIndexByImageIdResponse.response();
     int32_t code = response.code();
     if (200 != code) {
@@ -95,12 +109,12 @@ bool TargetDetectionClient::getResultByImageId(int64_t imageId, std::vector<Targ
     for (int i = 0; i < resultsCnt; ++i) {
         auto result = getResultIndexByImageIdResponse.results(i);
         int c = result.labelid();
-        if (c >= labels.size()) {
+        if (c >= pImpl->labels.size()) {
             std::cout << "Invalid label ID: " << c << std::endl;
             results[i].label = std::to_string(c);
         }
         else {
-            results[i].label = labels[c];
+            results[i].label = pImpl->labels[c];
         }
         results[i].confidence = result.confidence();
         results[i].x1 = result.x1();
@@ -112,8 +126,8 @@ bool TargetDetectionClient::getResultByImageId(int64_t imageId, std::vector<Targ
 }
 
 bool TargetDetectionClient::loadModel(int64_t taskId) {
-    if (shouldStop.load()) return false;
-    if (nullptr == stub) {
+    if (pImpl->shouldStop.load()) return false;
+    if (nullptr == pImpl->stub) {
         return false;
     }
     targetDetection::LoadModelRequest loadModelRequest;
@@ -121,7 +135,7 @@ bool TargetDetectionClient::loadModel(int64_t taskId) {
     grpc::ClientContext context;
 
     loadModelRequest.set_taskid(taskId);
-    grpc::Status status = stub->loadModel(&context, loadModelRequest, &loadModelResponse);
+    grpc::Status status = pImpl->stub->loadModel(&context, loadModelRequest, &loadModelResponse);
     targetDetection::CustomResponse response = loadModelResponse.response();
     int32_t code = response.code();
     if (200 != code) {
@@ -133,25 +147,25 @@ bool TargetDetectionClient::loadModel(int64_t taskId) {
     return true;
 }
 
-bool TargetDetectionClient::checkModelState(int64_t taskId, targetDetection::ModelState& modelState) {
-    if (shouldStop.load()) return false;
-    if (nullptr == stub) {
-        return false;
-    }
-    targetDetection::CheckModelStateRequest checkModelStateRequest;
-    targetDetection::CheckModelStateResponse checkModelStateResponse;
-    grpc::ClientContext context;
+// bool TargetDetectionClient::checkModelState(int64_t taskId, targetDetection::ModelState& modelState) {
+//     if (pImpl->shouldStop.load()) return false;
+//     if (nullptr == pImpl->stub) {
+//         return false;
+//     }
+//     targetDetection::CheckModelStateRequest checkModelStateRequest;
+//     targetDetection::CheckModelStateResponse checkModelStateResponse;
+//     grpc::ClientContext context;
 
-    checkModelStateRequest.set_taskid(taskId);
-    grpc::Status status = stub->checkModelState(&context, checkModelStateRequest, &checkModelStateResponse);
-    targetDetection::CustomResponse response = checkModelStateResponse.response();
-    int32_t code = response.code();
-    if (200 != code) {
-        auto message = response.message();
-        // TODO 以后改成日志
-        std::cout << message << std::endl;
-        return false;
-    }
-    modelState = checkModelStateResponse.modelstate();
-    return true;
-}
+//     checkModelStateRequest.set_taskid(taskId);
+//     grpc::Status status = pImpl->stub->checkModelState(&context, checkModelStateRequest, &checkModelStateResponse);
+//     targetDetection::CustomResponse response = checkModelStateResponse.response();
+//     int32_t code = response.code();
+//     if (200 != code) {
+//         auto message = response.message();
+//         // TODO 以后改成日志
+//         std::cout << message << std::endl;
+//         return false;
+//     }
+//     modelState = checkModelStateResponse.modelstate();
+//     return true;
+// }

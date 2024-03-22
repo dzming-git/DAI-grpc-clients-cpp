@@ -1,54 +1,66 @@
-#include "grpc/clients/target_tracking/target_tracking_client.h"
+#include "target_tracking_client.h"
+#include <grpc++/grpc++.h>
+#include <mutex>
+#include <opencv2/opencv.hpp>
+#include "target_tracking.grpc.pb.h"
+#include "target_tracking.pb.h"
 
-TargetTrackingClient::TargetTrackingClient(): stub(nullptr), taskId(0) {
-    shouldStop.store(false);
+struct TargetTrackingClient::Impl {
+    std::mutex stubMutex;
+    targetTracking::Communicate::Stub* stub = nullptr;
+    int64_t taskId = 0;
+    std::atomic<bool> shouldStop{false};
+};
+
+TargetTrackingClient::TargetTrackingClient(): pImpl(new Impl()) {
+
 }
 
 TargetTrackingClient::~TargetTrackingClient() {
-    shouldStop.store(true);
-    std::lock_guard<std::mutex> lock(stubMutex);
-    if (stub) {
-        delete stub;
-        stub = nullptr;
+    pImpl->shouldStop.store(true);
+    std::lock_guard<std::mutex> lock(pImpl->stubMutex);
+    if (pImpl->stub) {
+        delete pImpl->stub;
+        pImpl->stub = nullptr;
     }
 }
 
 bool TargetTrackingClient::setAddress(std::string ip, int port) {
-    if (shouldStop.load()) return false;
+    if (pImpl->shouldStop.load()) return false;
     // TODO 重置时未考虑线程安全
     std::shared_ptr<grpc::ChannelInterface> channel = grpc::CreateChannel(ip + ":" + std::to_string(port), grpc::InsecureChannelCredentials());
     std::unique_ptr<targetTracking::Communicate::Stub> stubTmp = targetTracking::Communicate::NewStub(channel);
     // 重置
-    if (stub) {
-        delete stub;
-        stub = nullptr;
+    if (pImpl->stub) {
+        delete pImpl->stub;
+        pImpl->stub = nullptr;
     }
     // unique_ptr 转为 普通指针
-    stub = stubTmp.get();
+    pImpl->stub = stubTmp.get();
     stubTmp.release();
     return true;
 }
 
 bool TargetTrackingClient::setTaskId(int64_t taskId) {
-    if (shouldStop.load()) return false;
-    this->taskId = taskId;
+    if (pImpl->shouldStop.load()) return false;
+    pImpl->taskId = taskId;
     return true;
 }
 
 bool TargetTrackingClient::getResultByImageId(int64_t imageId, std::vector<TargetTrackingClient::Result>& results) {
-    if (shouldStop.load()) return false;
-    if (nullptr == stub) {
+    if (pImpl->shouldStop.load()) return false;
+    if (nullptr == pImpl->stub) {
         return false;
     }
     targetTracking::GetResultByImageIdRequest getResultByImageIdRequest;
     targetTracking::GetResultByImageIdResponse getResultByImageIdResponse;
     grpc::ClientContext context;
 
-    getResultByImageIdRequest.set_taskid(taskId);
+    getResultByImageIdRequest.set_taskid(pImpl->taskId);
     getResultByImageIdRequest.set_imageid(imageId);
     getResultByImageIdRequest.set_wait(true);
     getResultByImageIdRequest.set_onlythelatest(false);
-    grpc::Status status = stub->getResultByImageId(&context, getResultByImageIdRequest, &getResultByImageIdResponse);
+    grpc::Status status = pImpl->stub->getResultByImageId(&context, getResultByImageIdRequest, &getResultByImageIdResponse);
     targetTracking::CustomResponse response = getResultByImageIdResponse.response();
     int32_t code = response.code();
     if (200 != code) {

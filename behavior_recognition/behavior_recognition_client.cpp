@@ -1,50 +1,62 @@
-#include "grpc/clients/behavior_recognition/behavior_recognition_client.h"
+#include "behavior_recognition_client.h"
+#include <opencv2/opencv.hpp>
+#include <grpc++/grpc++.h>
+#include "behavior_recognition.grpc.pb.h"
+#include "behavior_recognition.pb.h"
+#include <mutex>
 
-BehaviorRecognitionClient::BehaviorRecognitionClient(): stub(nullptr), taskId(0) {
-    shouldStop.store(false);
+struct BehaviorRecognitionClient::Impl {
+    std::mutex stubMutex;
+    behaviorRecognition::Communicate::Stub* stub = nullptr;
+    int64_t taskId = 0;
+    std::atomic<bool> shouldStop{false};
+};
+
+BehaviorRecognitionClient::BehaviorRecognitionClient(): pImpl(new Impl()) {
+
 }
 
 BehaviorRecognitionClient::~BehaviorRecognitionClient() {
-    shouldStop.store(true);
-    std::lock_guard<std::mutex> lock(stubMutex);
-    if (stub) {
-        delete stub;
-        stub = nullptr;
+    pImpl->shouldStop.store(true);
+    std::lock_guard<std::mutex> lock(pImpl->stubMutex);
+    if (pImpl->stub) {
+        delete pImpl->stub;
+        pImpl->stub = nullptr;
     }
 }
 
 bool BehaviorRecognitionClient::setAddress(std::string ip, int port) {
-    if (shouldStop.load()) return false;
+    if (pImpl->shouldStop.load()) return false;
     // TODO 重置时未考虑线程安全
     std::shared_ptr<grpc::ChannelInterface> channel = grpc::CreateChannel(ip + ":" + std::to_string(port), grpc::InsecureChannelCredentials());
     std::unique_ptr<behaviorRecognition::Communicate::Stub> stubTmp = behaviorRecognition::Communicate::NewStub(channel);
     // 重置
-    if (stub) {
-        delete stub;
-        stub = nullptr;
+    if (pImpl->stub) {
+        delete pImpl->stub;
+        pImpl->stub = nullptr;
     }
     // unique_ptr 转为 普通指针
-    stub = stubTmp.get();
+    pImpl->stub = stubTmp.get();
     stubTmp.release();
     return true;
 }
 
 bool BehaviorRecognitionClient::setTaskId(int64_t taskId) {
-    if (shouldStop.load()) return false;
-    this->taskId = taskId;
+    if (pImpl->shouldStop.load()) return false;
+    pImpl->taskId = taskId;
     return true;
 }
 
 bool BehaviorRecognitionClient::informImageId(int64_t imageId) {
-    if (shouldStop.load()) return false;
+    if (pImpl->shouldStop.load()) return false;
     behaviorRecognition::InformImageIdRequest request;
-    request.set_taskid(this->taskId);
+    request.set_taskid(pImpl->taskId);
     request.set_imageid(imageId);
 
     behaviorRecognition::InformImageIdResponse response;
     grpc::ClientContext context;
 
-    grpc::Status status = stub->informImageId(&context, request, &response);
+    grpc::Status status = pImpl->stub->informImageId(&context, request, &response);
 
     if (status.ok() && response.response().code() == 200) {
         return true;
@@ -56,15 +68,15 @@ bool BehaviorRecognitionClient::informImageId(int64_t imageId) {
 }
 
 bool BehaviorRecognitionClient::getResultByImageId(int64_t imageId, std::vector<BehaviorRecognitionClient::Result>& results) {
-    if (shouldStop.load()) return false;
+    if (pImpl->shouldStop.load()) return false;
     behaviorRecognition::GetResultByImageIdRequest request;
-    request.set_taskid(this->taskId);
+    request.set_taskid(pImpl->taskId);
     request.set_imageid(imageId);
 
     behaviorRecognition::GetResultByImageIdResponse response;
     grpc::ClientContext context;
 
-    grpc::Status status = stub->getResultByImageId(&context, request, &response);
+    grpc::Status status = pImpl->stub->getResultByImageId(&context, request, &response);
 
     if (status.ok() && response.response().code() == 200) {
         // 正确处理结果的代码...
@@ -89,14 +101,14 @@ bool BehaviorRecognitionClient::getResultByImageId(int64_t imageId, std::vector<
 }
 
 bool BehaviorRecognitionClient::getLatestResult(std::vector<BehaviorRecognitionClient::Result>& results) {
-    if (shouldStop.load()) return false;
+    if (pImpl->shouldStop.load()) return false;
     behaviorRecognition::GetLatestResultRequest request;
-    request.set_taskid(this->taskId);
+    request.set_taskid(pImpl->taskId);
 
     behaviorRecognition::GetLatestResultResponse response;
     grpc::ClientContext context;
 
-    grpc::Status status = stub->getLatestResult(&context, request, &response);
+    grpc::Status status = pImpl->stub->getLatestResult(&context, request, &response);
 
     if (status.ok() && response.response().code() == 200) {
         // 正确处理结果的代码...

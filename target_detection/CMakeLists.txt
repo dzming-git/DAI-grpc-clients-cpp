@@ -57,7 +57,6 @@ target_include_directories(${PROTO_NAME}_client PRIVATE
     ${gRPC_INCLUDE_DIRS}
     ${Protobuf_INCLUDE_DIRS}
     ${GENERATED_OUT_PATH}
-    ${CMAKE_SOURCE_DIR}/src
 )
 
 # 链接到目标库
